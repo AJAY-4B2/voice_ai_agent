@@ -1,0 +1,139 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: voice-ai-agent
+  namespace: default
+  labels:
+    app: voice-ai-agent
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: voice-ai-agent
+  template:
+    metadata:
+      labels:
+        app: voice-ai-agent
+    spec:
+      containers:
+      - name: api
+        image: AJAY-4B2/voice-ai-agent:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8000
+          name: http
+        env:
+        - name: ANTHROPIC_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: llm-secrets
+              key: anthropic-key
+        - name: OPENAI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: llm-secrets
+              key: openai-key
+        - name: REDIS_URL
+          value: "redis://redis-service:6379"
+        - name: APP_ENV
+          value: "production"
+        - name: LOG_LEVEL
+          value: "INFO"
+        
+        livenessProbe:
+          httpGet:
+            path: /api/health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        
+        readinessProbe:
+          httpGet:
+            path: /api/health
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        
+        resources:
+          limits:
+            memory: "2Gi"
+            cpu: "1"
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+        
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+      
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - voice-ai-agent
+              topologyKey: kubernetes.io/hostname
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: voice-ai-agent-svc
+  labels:
+    app: voice-ai-agent
+spec:
+  type: LoadBalancer
+  selector:
+    app: voice-ai-agent
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 8000
+    name: http
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: voice-ai-agent-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: voice-ai-agent
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: voice-ai-config
+data:
+  app-env: "production"
+  log-level: "INFO"
+  redis-url: "redis://redis-service:6379"
